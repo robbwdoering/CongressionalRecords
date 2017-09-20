@@ -54,12 +54,13 @@ def get_welcome_response():
     speech_output = "Welcome to the Congress Record. " \
                     "Please ask me about a congressman currently in office " \
                     "by saying something like " \
-                    "Who is Paul Ryan? " \
+                    "'Who is Paul Ryan?' " \
                     "or, " \
-                    "How is Paul Ryan compared to Nancy Polosi?" \
+                    "'How is Paul Ryan compared to Nancy Polosi?'" \
     # If the user either does not reply to the welcome message or says something
     # that is not understood, they will be prompted again with this text.
-    reprompt_text = None
+    reprompt_text = "Do you have question for me?" \
+                    "I can tell you about congressman, compare them to others, or give you committee membership details."
     should_end_session = False
     return build_response(session_attributes, build_speechlet_response(
         card_title, speech_output, reprompt_text, should_end_session))
@@ -77,7 +78,7 @@ def get_help_response():
     # If the user either does not reply to the welcome message or says something
     # that is not understood, they will be prompted again with this text.
     reprompt_text = None
-    should_end_session = False
+    should_end_session = True
     return build_response(session_attributes, build_speechlet_response(
         card_title, speech_output, reprompt_text, should_end_session))
 
@@ -119,21 +120,40 @@ def getCongressId(intent, name, currentMembers):
         if booleanMatch:
             validResponses += ((element['id']['bioguide'], element['name']['official_full']),)
 
-
+    
+    #This searches all congressman with a vaguely similar name, if no real matches were found.
     if (len(validResponses) == 0):
-        with open('past_members.json') as data:
-            pastMembers = json.load(data)
-            
-        for element in pastMembers:
-            if (element['name']['first'] + ' ' + element['name']['last']).lower() == name:
-                reprompt_text = "No one in modern congress matched that name, but I found a past member. Is that what you were looking for?"
-                return element
-        
-        #if no matchin congressman ever served, it will simply pass an error. 
-        reprompt_text = "Sorry, I couldn't recognize the name " + name + ". " \
-                        "Please try stating your request again."
+        usersFirst = name.split(' ')[0]
+        usersLast = name.split(' ')[-1]
 
-    elif (len(validResponses) > 1):
+
+        for element in currentMembers:
+            first = element['name']['first'].lower()
+            last = element['name']['last'].lower()
+            if 'nickname' in element['name']:
+                nickname = element['name']['nickname'].lower()
+            else:
+                nickname = ''
+            booleanMatch = (first == name or last == name or nickname == name
+                            or first == usersFirst or last == usersLast)
+
+            if booleanMatch:
+                validResponses += ((element['id']['bioguide'], element['name']['official_full']),)
+
+        #if only one response was found, it returns that result.
+        if (len(validResponses) == 1):
+            return (validResponses[0][0], reprompt_text)
+        #if none were found, it passes a simple error (what else could be done?)
+        if (len(validResponses) == 0):
+            reprompt_text = "Sorry, I couldn't recognize the name " + name + ". " \
+                            "I work best with both the first and last names of someone serving in the current congress. " \
+                            "Please try stating your request again."
+            return (validResponses, reprompt_text)
+        #and if many were found, it continues to the next block
+            
+
+    #This block is built to activate if the initital search turned up more than one, OR if the second less formal search did
+    if (len(validResponses) > 1):
         concatenatedNames = ""
         for element in validResponses:
             (state, party) = getBasicDetails(('state', 'party'), element[0], currentMembers)
@@ -207,38 +227,27 @@ def general_record_check(intent, session, currentMembers):
     '''
     card_title = "General Record Info"
     session_attributes = {}
-    should_end_session = False
-    speech_output = "I'm sorry, your congressman couldn't be found in my records."
+    should_end_session = True
+    speech_output = ""
     
     congressmanName = (intent['slots']['congressman']['value'])
     (ID, reprompt_text) = getCongressId(intent, congressmanName, currentMembers)
 
 
     #This checks whether an individual congressman was found before continuing
-    if reprompt_text == None:
-        (congressmanName, electedDate, state, party, house) =  getBasicDetails(('name', 'elected',
-            'state', 'party', 'house'), ID, currentMembers)
-        speech_output = "{0} is a {1} hailing from {2}, first elected to congress in {3}. " \
-                "They have served {4} terms in the house, and {5} terms in the senate.".format(congressmanName, party, state, electedDate, house[0], house[1])
-                
-    elif reprompt_text[0:10] == "No one in ":
-        (congressmanName, electedDate, state, party) =  (ID['name']['first'] + ' ' + ID['name']['last'],
-            ID['terms'][0]['start'][0:4], ID['terms'][-1]['state'], ID['terms'][-1]['party'])
-            
-        house = [0, 0]
-        for term in ID['terms']:
-            if term['type'] == 'rep':
-                house[0] += 1
-            elif term['type'] == 'sen':
-                house[1] += 1
-        house = (str(house[0]), str(house[1]))
-        
-        speech_output = "{0} is a {1} hailing from {2}, first elected to congress in {3}. " \
-                "They have served {4} terms in the house, and {5} terms in the senate.".format(congressmanName, party, state, electedDate, house[0], house[1])
+    if reprompt_text != None:
+        return build_response(session_attributes, build_speechlet_response(
+        card_title, reprompt_text, reprompt_text, False))
 
-    # Setting reprompt_text to None signifies that we do not want to reprompt
-    # the user. If the user does not respond or says something that is not
-    # understood, the session will end.
+
+    #And upon continuing, it gets all the basic details of the congressman and creates a sentence
+    (congressmanName, electedDate, state, party, house) =  getBasicDetails(('name', 'elected',
+        'state', 'party', 'house'), ID, currentMembers)
+    speech_output = "{0} is a {1} hailing from {2}, first elected to congress in {3}. " \
+            "They have served {4} terms in the house, and {5} terms in the senate.".format(
+                    congressmanName, party, state, electedDate, house[0], house[1])
+                
+
     return build_response(session_attributes, build_speechlet_response(
         card_title, speech_output, reprompt_text, should_end_session))
 
@@ -249,38 +258,38 @@ def individual_committee_check(intent, session, currentMembers):
     '''
     card_title = "Individual Committee Info"
     session_attributes = {}
-    should_end_session = False
+    should_end_session = True
     speech_output = ""
 
     
     congressmanName = (intent['slots']['congressman']['value'])
     (ID, reprompt_text) = getCongressId(intent, congressmanName, currentMembers)
 
-    if reprompt_text == None:
-        committeeAssignments = {}
-        with open('committee_members.json') as data:
-            jsonData = json.load(data)
 
-        for committee in jsonData:
-            for member in jsonData[committee]:
-                if member['bioguide'] == ID:
-                    committeeAssignments[committee] = member['rank']
-
-        
+    if reprompt_text != None:
+        return build_response(session_attributes, build_speechlet_response(
+        card_title, reprompt_text, reprompt_text, False))
 
 
-        speech_output = congressmanName + ' holds the chair of rank '
-        count = 0
-        for assignment in committeeAssignments:
-            if count == (len(committeeAssignments) - 1) and len(committeeAssignments) != 1:
-                speech_output += 'and {0} in the {1}.'.format(committeeAssignments[assignment], assignment) 
-            else:
-                speech_output += '{0} in the {1}, '.format(committeeAssignments[assignment], assignment)
-            count = count + 1
+    committeeAssignments = {}
+    with open('committee_members.json') as data:
+        jsonData = json.load(data)
+
+    for committee in jsonData:
+        for member in jsonData[committee]:
+            if member['bioguide'] == ID:
+                committeeAssignments[committee] = member['rank']
+
+    speech_output = congressmanName + ' holds the chair of rank '
+    count = 0
+    for assignment in committeeAssignments:
+        if count == (len(committeeAssignments) - 1) and len(committeeAssignments) != 1:
+            speech_output += 'and {0} in the {1}.'.format(committeeAssignments[assignment], assignment) 
+        else:
+            speech_output += '{0} in the {1}, '.format(committeeAssignments[assignment], assignment)
+        count = count + 1
 
 
-
-    
     return build_response(session_attributes, build_speechlet_response(
         card_title, speech_output, reprompt_text, should_end_session))
 
@@ -291,8 +300,8 @@ def record_compare(intent, session, currentMembers):
     '''
     card_title = "Comparison"
     session_attributes = {}
-    should_end_session = False
-    speech_output = ""
+    should_end_session = True
+    speech_output = 'I\'m sorry, I couldn\'t find one of those congressman in my records'
 
     congressmanName1 = (intent['slots']['congressmanOne']['value'])
     congressmanName2 = (intent['slots']['congressmanTwo']['value'])
@@ -300,49 +309,71 @@ def record_compare(intent, session, currentMembers):
     (ID1, reprompt_text1) = getCongressId(intent, congressmanName1, currentMembers)
     (ID2, reprompt_text2) = getCongressId(intent, congressmanName2, currentMembers)
 
+    #First checks that both congressman were found
+    if reprompt_text1 != None:
+        return build_response(session_attributes, build_speechlet_response(
+        card_title, reprompt_text1, reprompt_text1, False))
+    if reprompt_text2 != None:
+        return build_response(session_attributes, build_speechlet_response(
+        card_title, reprompt_text2, reprompt_text2, False))
 
-    if reprompt_text1 == None and reprompt_text2 == None:
-        for element in currentMembers:
-            if element['id']['bioguide'] == ID1:
-                if element['terms'][-1]['type'] == 'sen':
-                    house = 'senate'
-                else:
-                    house = 'house'
-                break
+
+    #Then looks for each, so we know if they ever served at the same time
+    for element in currentMembers:
+        if element['id']['bioguide'] == ID1:
+            houseHistory1 = ''
+            for term in element['terms']:
+                if term['type'] == 'sen': houseHistory1 += 'S'
+                else: houseHistory1 += 'H'
+            continue
+        if element['id']['bioguide'] == ID2:
+            houseHistory2 = ''
+            for term in element['terms']:
+                if term['type'] == 'sen': houseHistory2 += 'S'
+                else: houseHistory2 += 'H'
+
+    #This would mess up for senators who had a break in their service, but according to wikipedia that is such a rare
+    #occurence that this will work for now. To fix, also check the dates on each membership.
+    MAX_SEARCH_LENGTH = 3
+    minLength = min(len(houseHistory1), len(houseHistory2), MAX_SEARCH_LENGTH)
+    #this truncates each to only be as long as neccesary.
+    houseHistory1 = houseHistory1[-minLength:]
+    houseHistory2 = houseHistory2[-minLength:]
+
+
+    
+    totalVotesShared = 0
+    votesDisagree = 0
+    #loops through all congresses that they were both in. Will just skip to the return if one wasn't found.
+    for num in range(0, minLength):
+        #skips this iteration if they weren't in the same house during these years
+        if houseHistory1[-(num + 1)] != houseHistory2[-(num + 1)]:
+            continue
         
-        totalVotesShared = 0
-        votesDisagree = 0
-        #loops through the three most recent congresses. 
-        for num in range(113, 115):
-            #First half of this code checks whether both congressman served in the same chamber. 
-
-            firstFound = False
-            secondFound = False
-
-            response = Request("https://api.propublica.org/congress/v1/{0}/{1}/members.json".format(num, house), 
-                headers={"X-API-Key" : "DIl7ejWZz5ajxyzYyOjDN89YLp1xekEb1mjWkjq1"})
-            response = urlopen(response)
-            membership = json.load(response)
-            for member in membership['results'][0]['members']:
-                if ID1 == member['id']:
-                    firstFound = True
-                if ID2 == member['id']:
-                    secondFound = True
-
-
-            #And the second half gets the desired info only if they did. 
-            if firstFound and secondFound:
-                response = Request("https://api.propublica.org/congress/v1/members/{0}/votes/{1}/{2}/{3}.json".format(ID1, ID2, num, house), 
-                    headers={"X-API-Key" : "DIl7ejWZz5ajxyzYyOjDN89YLp1xekEb1mjWkjq1"})
-                response = urlopen(response)
-                votes = json.load(response)
-                totalVotesShared = totalVotesShared + votes['results'][0]['common_votes']
-                votesDisagree = votesDisagree + votes['results'][0]['disagree_votes']
-        if totalVotesShared == 0:
-            speech_output = '{0} and {1} have never voted on the same issue, most likely because they weren\'t in office at the same time'.format(congressmanName1, congressmanName2)
+        if houseHistory1[-(num + 1)] == 'H':
+            house = 'house'
         else:
-            speech_output = '{0} and {1} have voted on the same issue {2} times, and agreed about {3} percent of the time.'.format(
-                congressmanName1, congressmanName2, totalVotesShared, (totalVotesShared / (totalVotesShared - votesDisagree)))
+            house = 'senate'
+
+
+        #This does the actual work of counting the shared votes
+        response = Request("https://api.propublica.org/congress/v1/members/{0}/votes/{1}/{2}/{3}.json".format(
+            ID1, ID2, 115 - num, house), headers={"X-API-Key" : "DIl7ejWZz5ajxyzYyOjDN89YLp1xekEb1mjWkjq1"})
+        response = urlopen(response)
+        votes = json.load(response)
+
+        totalVotesShared = totalVotesShared + votes['results'][0]['common_votes']
+        votesDisagree = votesDisagree + votes['results'][0]['disagree_votes']
+
+    if totalVotesShared == 0:
+        speech_output = '{0} and {1} have never voted on the same issue, most likely because they weren\'t' \
+                ' in the same house of congress at the same time'.format(congressmanName1, congressmanName2)
+    else:
+        percentage = 100 * (totalVotesShared - votesDisagree) / float(totalVotesShared)
+        percentage = '%.0f' % percentage
+        speech_output = '{0} and {1} have voted on the same issue {2} times, ' \
+                'and agreed about {3} percent of the time.'.format(
+                congressmanName1, congressmanName2, totalVotesShared, percentage)
 
     return build_response(session_attributes, build_speechlet_response(
         card_title, speech_output, reprompt_text1, should_end_session))
@@ -384,16 +415,34 @@ def on_intent(intent_request, session):
 
 
     # Dispatch to your skill's intent handlers
+    # Each block here first checks for valid input, and ensures no empty values
     if intent_name == "generalRecordCheck":
+        if 'value' not in intent['slots']['congressman']:
+            speech_output = 'I\'m sorry, I didn\'t catch a name in that question. Please try again.'
+            return build_response({}, build_speechlet_response(
+                'Error', speech_output, None, False))
         return general_record_check(intent, session, currentMembers)
+
     elif intent_name == "indivCommitteeCheck":
+        if 'value' not in intent['slots']['congressman']:
+            speech_output = 'I\'m sorry, I didn\'t catch a name in that question. Please try again.'
+            return build_response({}, build_speechlet_response(
+                'Error', speech_output, None, False))
         return individual_committee_check(intent, session, currentMembers)
+
     elif intent_name == "recordCompare":
+        if 'value' not in intent['slots']['congressmanOne'] or 'value' not in intent['slots']['congressmanTwo']:
+            speech_output = 'I\'m sorry, I only heard the name of one congressman. Please try again.'
+            return build_response({}, build_speechlet_response(
+                'Error', speech_output, None, False))
         return record_compare(intent, session, currentMembers)
+
     elif intent_name == "AMAZON.HelpIntent":
         return get_help_response()
+
     elif intent_name == "AMAZON.CancelIntent" or intent_name == "AMAZON.StopIntent":
         return handle_session_end_request()
+
     else:
         raise ValueError("Invalid intent")
 
